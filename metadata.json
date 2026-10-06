@@ -1,0 +1,7 @@
+{
+  "name": "Recap Studio AI",
+  "description": "Turn your movie or anime into a professional recap script and accurate editing video cut guide using Gemini AI.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
+
