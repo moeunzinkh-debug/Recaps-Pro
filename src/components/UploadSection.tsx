@@ -16,6 +16,7 @@ import {
 import { Project, SampleDemoVideo, VideoInfo } from '../types';
 import { VideoPlayer, VideoPlayerRef } from './VideoPlayer';
 import { formatTimecode } from '../utils/exportUtils';
+import { importVideoFromUrl, readVideoMetadataFromFile, WORKER_UPLOAD_LIMIT_MB } from '../utils/apiClient';
 
 interface UploadSectionProps {
   project: Project;
@@ -60,10 +61,18 @@ export const UploadSection: React.FC<UploadSectionProps> = ({
     setUploadError(null);
     setIsUploading(true);
 
-    const formData = new FormData();
-    formData.append('video', file);
-
     try {
+      // The Cloudflare Worker has no ffprobe, so the browser measures the video
+      // first. These fields MUST be appended before the file: the Worker's
+      // streaming multipart parser collects text fields that precede the file.
+      const measured = await readVideoMetadataFromFile(file);
+
+      const formData = new FormData();
+      if (measured.duration) formData.append('durationSec', String(measured.duration));
+      if (measured.width) formData.append('width', String(measured.width));
+      if (measured.height) formData.append('height', String(measured.height));
+      formData.append('video', file);
+
       const res = await fetch('/api/upload', {
         method: 'POST',
         body: formData,
@@ -81,6 +90,7 @@ export const UploadSection: React.FC<UploadSectionProps> = ({
         mimeType: data.file.mimeType,
         size: data.file.size,
         videoUrl: data.file.videoUrl,
+        duration: data.file.duration || measured.duration,
         detectedTitle: project.settings.movieName || file.name.replace(/\.[^/.]+$/, ''),
       };
 
@@ -107,19 +117,10 @@ export const UploadSection: React.FC<UploadSectionProps> = ({
     setIsUploading(true);
 
     try {
-      const res = await fetch('/api/upload-url', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          url: urlInput.trim(),
-          title: project.settings.movieName || 'Imported Video',
-        }),
-      });
-
-      const data = await res.json();
-      if (!res.ok || !data.success) {
-        throw new Error(data.error || 'Failed to download video from URL');
-      }
+      const data = await importVideoFromUrl(
+        urlInput.trim(),
+        project.settings.movieName || 'Imported Video'
+      );
 
       const videoInfo: VideoInfo = {
         fileName: data.file.fileName,
@@ -128,6 +129,7 @@ export const UploadSection: React.FC<UploadSectionProps> = ({
         mimeType: data.file.mimeType,
         size: data.file.size,
         videoUrl: data.file.videoUrl,
+        duration: data.file.duration,
         detectedTitle: project.settings.movieName || data.file.fileName.replace(/\.[^/.]+$/, ''),
       };
 
@@ -143,29 +145,43 @@ export const UploadSection: React.FC<UploadSectionProps> = ({
     }
   };
 
-  const handleSelectSample = (sample: SampleDemoVideo) => {
+  const handleSelectSample = async (sample: SampleDemoVideo) => {
     setUploadError(null);
-    const videoInfo: VideoInfo = {
-      fileName: `${sample.title}.mp4`,
-      storedName: sample.storedName || `${sample.id}.mp4`,
-      filePath: `uploads/${sample.storedName || `${sample.id}.mp4`}`,
-      mimeType: 'video/mp4',
-      size: 2000000,
-      videoUrl: sample.url,
-      duration: sample.durationSec,
-      detectedTitle: sample.title,
-      detectedType: sample.type,
-      isSample: true,
-    };
+    setIsUploading(true);
 
-    onUpdateProject({
-      name: `${sample.title} (Recap)`,
-      videoInfo,
-      settings: {
-        ...project.settings,
-        movieName: sample.title,
-      },
-    });
+    // Ask the server to confirm the sample: on Cloudflare the clip must exist in
+    // the R2 bucket (`npm run samples:upload`), so this reports a real error
+    // instead of failing later during the analysis.
+    try {
+      const data = await importVideoFromUrl(sample.url, sample.title);
+
+      const videoInfo: VideoInfo = {
+        fileName: data.file.fileName || `${sample.title}.mp4`,
+        storedName: data.file.storedName || sample.storedName,
+        filePath: data.file.filePath,
+        mimeType: 'video/mp4',
+        size: data.file.size || 0,
+        videoUrl: data.file.videoUrl || sample.url,
+        duration: data.file.duration || sample.durationSec,
+        detectedTitle: sample.title,
+        detectedType: sample.type,
+        isSample: true,
+      };
+
+      onUpdateProject({
+        name: `${sample.title} (Recap)`,
+        videoInfo,
+        settings: {
+          ...project.settings,
+          movieName: sample.title,
+        },
+      });
+    } catch (err: any) {
+      console.error('Sample selection error:', err);
+      setUploadError(err.message || 'Could not load the demo sample video.');
+    } finally {
+      setIsUploading(false);
+    }
   };
 
   return (
@@ -243,7 +259,7 @@ export const UploadSection: React.FC<UploadSectionProps> = ({
                 or <span className="text-amber-400 underline font-medium">Browse Files</span> on your device
               </div>
               <div className="text-[10px] text-slate-400 mt-1">
-                Supports up to 1GB • Processed via Gemini Files API
+                Up to {WORKER_UPLOAD_LIMIT_MB}MB per upload • stored in Cloudflare R2 • processed via Gemini Files API
               </div>
             </div>
 
