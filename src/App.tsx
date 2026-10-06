@@ -19,6 +19,7 @@ import {
   duplicateProject,
   getStoredApiKey,
 } from './utils/storage';
+import { pollAnalyzeJob, startAnalyze, AnalyzeJobStatus } from './utils/apiClient';
 import { Sidebar } from './components/Sidebar';
 import { UploadSection } from './components/UploadSection';
 import { RecapView } from './components/RecapView';
@@ -161,13 +162,12 @@ export default function App() {
 
     try {
       const storedKey = getStoredApiKey() || undefined;
-      const res = await fetch('/api/analyze', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          ...(storedKey ? { 'x-gemini-api-key': storedKey } : {}),
-        },
-        body: JSON.stringify({
+
+      // Both backends share this call. The Express server answers synchronously
+      // with `data`; the Cloudflare Worker answers with a `jobId` that is polled
+      // below (a Worker request cannot stay open while Gemini processes a video).
+      const started = await startAnalyze(
+        {
           storedName: activeProject.videoInfo.storedName,
           movieName: activeProject.settings.movieName,
           episodeNumber: activeProject.settings.episodeNumber,
@@ -178,14 +178,35 @@ export default function App() {
           customDurationMinutes: activeProject.settings.customDurationMinutes,
           model: activeProject.settings.model || '3.8',
           apiKey: storedKey,
-        }),
-      });
+        },
+        storedKey
+      );
+
+      let analysis = started.data;
+
+      if (!analysis && started.jobId) {
+        // Worker path — stop the simulated progress and follow real progress.
+        stepTimers.forEach(clearTimeout);
+
+        setAnalysisStep(started.message || 'Uploading video to Gemini engine...');
+        if (typeof started.progress === 'number') setAnalysisProgress(started.progress);
+
+        analysis = await pollAnalyzeJob({
+          jobId: started.jobId,
+          apiKey: storedKey,
+          onStatus: (status: AnalyzeJobStatus) => {
+            if (status.message) setAnalysisStep(status.message);
+            if (typeof status.progress === 'number') {
+              setAnalysisProgress((prev) => Math.max(prev, status.progress as number));
+            }
+          },
+        });
+      }
 
       stepTimers.forEach(clearTimeout);
 
-      const data = await res.json();
-      if (!res.ok || !data.success) {
-        throw new Error(data.error || 'Video analysis failed. Please try again.');
+      if (!analysis) {
+        throw new Error('The analysis finished without any recap data. Please try again.');
       }
 
       setAnalysisProgress(100);
@@ -193,8 +214,8 @@ export default function App() {
 
       // Update project with real generated data
       handleUpdateActiveProject({
-        name: `${data.data.detectedTitle || activeProject.name} (Recap)`,
-        analysis: data.data,
+        name: `${analysis.detectedTitle || activeProject.name} (Recap)`,
+        analysis,
       });
 
       // Switch to Recap Script view automatically after brief celebration

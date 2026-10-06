@@ -1,0 +1,46 @@
+#:schema node_modules/wrangler/config-schema.json
+name = "recaps-pro"
+main = "src/index.ts"
+# Keep this in sync with today's date when you change the worker code.
+compatibility_date = "2026-10-06"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Static assets: the Vite build of the React app (run `npm run build` in the
+# repository root, or just use `npm run deploy` inside worker/).
+# `run_worker_first` sends /api/* straight to the Worker; every other request is
+# served as a static file with SPA fallback (so client-side routes work).
+# ─────────────────────────────────────────────────────────────────────────────
+[assets]
+directory = "../dist"
+binding = "ASSETS"
+not_found_handling = "single-page-application"
+run_worker_first = ["/api/*"]
+
+# ─────────────────────────────────────────────────────────────────────────────
+# R2 bucket: replaces the `uploads/` folder from the Express server.
+# Create it once with:  npx wrangler r2 bucket create recaps-pro-videos
+# ─────────────────────────────────────────────────────────────────────────────
+[[r2_buckets]]
+binding = "VIDEO_BUCKET"
+bucket_name = "recaps-pro-videos"
+preview_bucket_name = "recaps-pro-videos"
+
+[vars]
+# Optional. Prefer `npx wrangler secret put GEMINI_API_KEY` for a real key —
+# visitors can also connect their own key from the Settings screen.
+# GEMINI_API_KEY = ""
+#
+# Optional: public R2 / custom domain URL, useful for very large files.
+# R2_PUBLIC_URL = "https://videos.example.com"
+#
+# Optional: extra origins allowed to call this Worker from another site
+# (comma separated). The Worker's own origin always works.
+# ALLOWED_ORIGINS = "https://my-frontend.pages.dev"
+
+[observability]
+enabled = true
+
+[dev]
+port = 8787
+ip = "0.0.0.0"
+local_protocol = "http"

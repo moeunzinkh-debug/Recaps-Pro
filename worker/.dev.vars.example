@@ -1,0 +1,9 @@
+# Local development secrets for `wrangler dev`.
+# Copy this file to `.dev.vars` (git-ignored) and fill in your own values.
+
+# Optional: a server-side Gemini API key. You can also just paste your key into
+# the app's Settings screen — that path needs no Worker secret at all.
+GEMINI_API_KEY=""
+
+# Optional: extra origins allowed to call this Worker from a different site.
+ALLOWED_ORIGINS=""
